@@ -1,19 +1,48 @@
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 
 class OCAAst(BaseModel):
-    version: str
-    commands: List["Command"]
-    commands_meta: Dict[int, "CommandMeta"]
-    meta: Dict[str, str]
+    version: str = "1.0.0"
+    commands: List["Command"] = []
+    commands_meta: Dict[int, "CommandMeta"] = {}
+    meta: Dict[str, str] = {}
 
 
 class Command(BaseModel):
     kind: "CommandType" = Field(alias="type")
     object_kind: "ObjectKind"
+
+    @model_validator(mode="before")
+    def validate_object_kind(cls, values):
+        object_kind_data = values.get("object_kind")
+        if not object_kind_data:
+            raise ValueError("Missing field: object_kind")
+        object_kind_type = object_kind_data.get("type")
+        if not object_kind_type:
+            raise ValueError("Missing field: object_kind.type")
+
+        if object_kind_type == ObjectKindType.CaptureBase:
+            content = object_kind_data.get("content")
+            if not content:
+                raise ValueError("Missing field: conent for CaptureBase")
+            values["object_kind"] = ObjectKind.capture_base(CaptureContent(**content))
+        elif object_kind_type == ObjectKindType.OCABunde:
+            content = object_kind_data.get("content")
+            if not content:
+                raise ValueError("Missing field: conent for OCABunde")
+            values["object_kind"] = ObjectKind.oca_bundle(BundleContent(**content))
+        elif object_kind_type == ObjectKindType.Overlay:
+            content = object_kind_data.get("content")
+            if not content:
+                raise ValueError("Missing field: conent for Overlay")
+            values["object_kind"] = ObjectKind.overlay(Overlay(**content))
+        else:
+            raise ValueError(f"Unknown object_kind type: {object_kind_type}")
+
+        return values
 
 
 class CommandTypeValue(str, Enum):
@@ -110,6 +139,130 @@ class ObjectKind(BaseModel):
                 "object_kind": "Overlay",
                 "content": content,
             }
+
+    @classmethod
+    def from_int(cls, val: int) -> "ObjectKind":
+        mapping = {
+            0: cls.capture_base(CaptureContent()),
+            1: cls.oca_bundle(BundleContent(said="")),
+            2: cls.overlay(OverlayType.Label, Content()),
+            3: cls.overlay(OverlayType.Information, Content()),
+            4: cls.overlay(OverlayType.Encoding, Content()),
+            5: cls.overlay(OverlayType.CharacterEncoding, Content()),
+            6: cls.overlay(OverlayType.Format, Content()),
+            7: cls.overlay(OverlayType.Meta, Content()),
+            8: cls.overlay(OverlayType.Standard, Content()),
+            9: cls.overlay(OverlayType.Cardinality, Content()),
+            10: cls.overlay(OverlayType.Conditional, Content()),
+            11: cls.overlay(OverlayType.Conformance, Content()),
+            12: cls.overlay(OverlayType.EntryCode, Content()),
+            13: cls.overlay(OverlayType.Entry, Content()),
+            14: cls.overlay(OverlayType.Unit, Content()),
+            15: cls.overlay(OverlayType.AttributeMapping, Content()),
+            16: cls.overlay(OverlayType.EntryCodeMapping, Content()),
+            17: cls.overlay(OverlayType.Subset, Content()),
+            18: cls.overlay(OverlayType.UnitMapping, Content()),
+            19: cls.overlay(OverlayType.Layout, Content()),
+            20: cls.overlay(OverlayType.Sensitivity, Content()),
+        }
+        if val in mapping:
+            return mapping[val]
+        else:
+            raise ValueError("Unknown object type")
+
+    def to_int(self) -> int:
+        reverse_mapping = {
+            (ObjectKindType.CaptureBase, None): 0,
+            (ObjectKindType.OCABundle, None): 1,
+            (ObjectKindType.Overlay, OverlayType.Label): 2,
+            (ObjectKindType.Overlay, OverlayType.Information): 3,
+            (ObjectKindType.Overlay, OverlayType.Encoding): 4,
+            (ObjectKindType.Overlay, OverlayType.CharacterEncoding): 5,
+            (ObjectKindType.Overlay, OverlayType.Format): 6,
+            (ObjectKindType.Overlay, OverlayType.Meta): 7,
+            (ObjectKindType.Overlay, OverlayType.Standard): 8,
+            (ObjectKindType.Overlay, OverlayType.Cardinality): 9,
+            (ObjectKindType.Overlay, OverlayType.Conditional): 10,
+            (ObjectKindType.Overlay, OverlayType.Conformance): 11,
+            (ObjectKindType.Overlay, OverlayType.EntryCode): 12,
+            (ObjectKindType.Overlay, OverlayType.Entry): 13,
+            (ObjectKindType.Overlay, OverlayType.Unit): 14,
+            (ObjectKindType.Overlay, OverlayType.AttributeMapping): 15,
+            (ObjectKindType.Overlay, OverlayType.EntryCodeMapping): 16,
+            (ObjectKindType.Overlay, OverlayType.Subset): 17,
+            (ObjectKindType.Overlay, OverlayType.UnitMapping): 18,
+            (ObjectKindType.Overlay, OverlayType.Layout): 19,
+            (ObjectKindType.Overlay, OverlayType.Sensitivity): 20,
+        }
+        overlay_type = (
+            self.value.get("overlay_type")
+            if self.type == ObjectKindType.Overlay
+            else None
+        )
+        key = (self.type, overlay_type)
+        if key in reverse_mapping:
+            return reverse_mapping[key]
+        else:
+            raise ValueError("Unknown object type")
+
+    @model_validator(mode="before")
+    def deserialize(cls, values):
+        object_kind = values.get("type")
+        overlay_type = values.get("overlay_type")
+        content = Content()
+
+        object_kind_mapping = {
+            ObjectKindType.CaptureBase: lambda: cls.capture_base(CaptureContent()),
+            ObjectKindType.OCABundle: lambda: cls.oca_bundle(BundleContent(said="")),
+            ObjectKindType.Overlay: lambda: overlay_mapping.get(
+                overlay_type, lambda: None
+            )(),
+        }
+
+        overlay_mapping = {
+            OverlayType.Label: lambda: cls.overlay(OverlayType.Label, content),
+            OverlayType.Information: lambda: cls.overlay(
+                OverlayType.Information, content
+            ),
+            OverlayType.Encoding: lambda: cls.overlay(OverlayType.Encoding, content),
+            OverlayType.CharacterEncoding: lambda: cls.overlay(
+                OverlayType.CharacterEncoding, content
+            ),
+            OverlayType.Format: lambda: cls.overlay(OverlayType.Format, content),
+            OverlayType.Meta: lambda: cls.overlay(OverlayType.Meta, content),
+            OverlayType.Standard: lambda: cls.overlay(OverlayType.Standard, content),
+            OverlayType.Cardinality: lambda: cls.overlay(
+                OverlayType.Cardinality, content
+            ),
+            OverlayType.Conditional: lambda: cls.overlay(
+                OverlayType.Conditional, content
+            ),
+            OverlayType.Conformance: lambda: cls.overlay(
+                OverlayType.Conformance, content
+            ),
+            OverlayType.EntryCode: lambda: cls.overlay(OverlayType.EntryCode, content),
+            OverlayType.Entry: lambda: cls.overlay(OverlayType.Entry, content),
+            OverlayType.Unit: lambda: cls.overlay(OverlayType.Unit, content),
+            OverlayType.AttributeMapping: lambda: cls.overlay(
+                OverlayType.AttributeMapping, content
+            ),
+            OverlayType.EntryCodeMapping: lambda: cls.overlay(
+                OverlayType.EntryCodeMapping, content
+            ),
+            OverlayType.Subset: lambda: cls.overlay(OverlayType.Subset, content),
+            OverlayType.UnitMapping: lambda: cls.overlay(
+                OverlayType.UnitMapping, content
+            ),
+            OverlayType.Layout: lambda: cls.overlay(OverlayType.Layout, content),
+            OverlayType.Sensitivity: lambda: cls.overlay(
+                OverlayType.Sensitivity, content
+            ),
+        }
+
+        if object_kind in object_kind_mapping:
+            return object_kind_mapping[object_kind]()
+        else:
+            raise ValueError(f"Unknown object kind: {object_kind}")
 
 
 class CaptureContent(BaseModel):
@@ -275,6 +428,20 @@ class RefValue(BaseModel):
             return f"refs:{self.value}"
         elif self.type == RefValueType.Name:
             return f"refn:{self.value}"
+
+    @classmethod
+    def deserialize(cls, s: str):
+        try:
+            tag, rest = s.split(":", 1)
+        except ValueError:
+            raise ValueError(f"invalid reference: {s}")
+
+        if tag == "refs":
+            return cls.said(rest)
+        elif tag == "refn":
+            return cls.name(rest)
+        else:
+            raise ValueError(f"unknown reference type: {tag}")
 
 
 class ReferenceAttrType(BaseModel):
